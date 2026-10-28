@@ -76,6 +76,17 @@ void VioManagerOptions::print_and_load_estimator(
     parser->parse_config("zupt_noise_multiplier", zupt_noise_multiplier);
     parser->parse_config("zupt_max_disparity", zupt_max_disparity);
     parser->parse_config("zupt_only_at_beginning", zupt_only_at_beginning);
+    parser->parse_config("use_height", use_height, false);
+    parser->parse_config("height_topic", height_topic, false);
+    parser->parse_config("height_sigma", height_sigma, false);
+    parser->parse_config("height_chi2_multipler", height_chi2_multipler, false);
+    parser->parse_config("height_max_dt", height_max_dt, false);
+    parser->parse_config("height_reacquire_s", height_reacquire_s, false);
+    parser->parse_config("use_ground", use_ground, false);
+    parser->parse_config("ground_height_m", ground_height_m, false);
+    parser->parse_config("ground_sigma", ground_sigma, false);
+    parser->parse_config("ground_huber_k", ground_huber_k, false);
+    parser->parse_config("ground_min_height_m", ground_min_height_m, false);
     parser->parse_config("record_timing_information",
                          record_timing_information);
     parser->parse_config("record_timing_filepath", record_timing_filepath);
@@ -86,6 +97,14 @@ void VioManagerOptions::print_and_load_estimator(
   PRINT_DEBUG("  - zupt_noise_multiplier: %.2f\n", zupt_noise_multiplier);
   PRINT_DEBUG("  - zupt_max_disparity: %.4f\n", zupt_max_disparity);
   PRINT_DEBUG("  - zupt_only_at_beginning?: %d\n", zupt_only_at_beginning);
+  PRINT_INFO("  - height aiding: %d (%s, sigma %.2f m, chi2 x%.1f, max dt %.2f s, "
+             "re-acquire after %.1f s)\n",
+             (int)use_height, height_topic.c_str(), height_sigma,
+             height_chi2_multipler, height_max_dt, height_reacquire_s);
+  PRINT_INFO("  - ground-plane prior: %d (ground %.1f m above the barometer's first "
+             "sample, sigma %.1f m, huber %.1f, from %.0f m)\n",
+             (int)use_ground, ground_height_m, ground_sigma, ground_huber_k,
+             ground_min_height_m);
   PRINT_DEBUG("  - record timing?: %d\n", (int)record_timing_information);
   PRINT_DEBUG("  - record timing filepath: %s\n",
               record_timing_filepath.c_str());

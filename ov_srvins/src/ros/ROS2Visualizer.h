@@ -41,6 +41,7 @@
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <sensor_msgs/msg/fluid_pressure.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
@@ -124,6 +125,9 @@ public:
   /// Callback for inertial information
   void callback_inertial(const sensor_msgs::msg::Imu::SharedPtr msg);
 
+  /// CAIRN: barometer -> height (m) relative to the first sample
+  void callback_pressure(const sensor_msgs::msg::FluidPressure::SharedPtr msg);
+
   /// Callback for monocular cameras information
   void callback_monocular(const sensor_msgs::msg::Image::SharedPtr msg0,
                           int cam_id0);
@@ -173,6 +177,8 @@ protected:
 
   // Our subscribers and camera synchronizers
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu;
+  rclcpp::Subscription<sensor_msgs::msg::FluidPressure>::SharedPtr sub_pressure;
+  double pressure_p0_ = -1.0;
   std::vector<rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr>
       subs_cam;
   typedef message_filters::sync_policies::ApproximateTime<

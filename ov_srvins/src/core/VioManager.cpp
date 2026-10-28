@@ -49,6 +49,7 @@
 #include "state/State.h"
 #include "state/StateHelper.h"
 #include "update/UpdaterMSCKF.h"
+#include "update/UpdaterHelper.h"
 #include "update/UpdaterSLAM.h"
 #include "update/UpdaterZeroVelocity.h"
 
@@ -203,6 +204,213 @@ void VioManager::feed_measurement_imu(const ov_core::ImuData &message) {
       (!params.zupt_only_at_beginning || !has_moved_since_zupt)) {
     updaterZUPT->feed_imu(message, oldest_time);
   }
+}
+
+void VioManager::feed_measurement_height(double timestamp, double height) {
+  std::lock_guard<std::mutex> lck(height_mtx_);
+  if (!height_buffer_.empty() && timestamp <= height_buffer_.back().first)
+    return; // out of order or repeated
+  height_buffer_.emplace_back(timestamp, height);
+  while (!height_buffer_.empty() &&
+         height_buffer_.front().first < timestamp - 10.0)
+    height_buffer_.pop_front();
+}
+
+void VioManager::update_ground() {
+  if (!params.use_ground || !params.use_height || !is_initialized_vio ||
+      !height_offset_set_)
+    return;
+  // The ground in the VIO frame: z = (barometric height of the ground) -
+  // offset, the offset being the height aiding's frozen barometer - z.
+  const double z_ground = params.ground_height_m - height_offset_;
+  const Vec3 p_I = state->imu->pos();
+  const double cam_above = p_I(2) - z_ground;
+  if (cam_above < params.ground_min_height_m || state->features_SLAM.empty())
+    return;
+  const DataType sigma = params.ground_sigma;
+  std::vector<double> feat_above;
+  int used = 0, downweighted = 0;
+  for (const auto &pair : state->features_SLAM) {
+    std::shared_ptr<Landmark> landmark = pair.second;
+    if ((int)landmark->featid < state->options.max_aruco_features)
+      continue;
+    UpdaterHelper::UpdaterHelperFeature feat;
+    feat.featid = landmark->featid;
+    feat.feat_representation = landmark->feat_representation;
+    Vec3 p_FinG;
+    if (LandmarkRepresentation::is_relative_representation(
+            feat.feat_representation)) {
+      feat.anchor_cam_id = landmark->anchor_cam_id;
+      feat.anchor_clone_timestamp = landmark->anchor_clone_timestamp;
+      feat.p_FinA = landmark->get_xyz(false);
+      feat.p_FinA_fej = landmark->get_xyz(true);
+      std::shared_ptr<PoseJPL> clone =
+          state->get_clone_pose(feat.anchor_clone_timestamp);
+      if (clone == nullptr)
+        continue;
+      const Mat3 R_ItoC = state->calib_IMUtoCAM.at(feat.anchor_cam_id)->Rot();
+      const Vec3 p_IinC = state->calib_IMUtoCAM.at(feat.anchor_cam_id)->pos();
+      p_FinG = clone->Rot().transpose() * R_ItoC.transpose() *
+                   (feat.p_FinA - p_IinC) +
+               clone->pos();
+    } else {
+      feat.p_FinG = landmark->get_xyz(false);
+      feat.p_FinG_fej = landmark->get_xyz(true);
+      p_FinG = feat.p_FinG;
+    }
+    if (!p_FinG.allFinite())
+      continue;
+    feat_above.push_back(p_FinG(2) - z_ground);
+
+    // d p_FinG / d (anchor pose, calibration, feature): row z
+    Mat3 H_f;
+    std::vector<MatX> H_x;
+    std::vector<std::shared_ptr<Type>> x_order;
+    UpdaterHelper::get_feature_jacobian_representation(state, feat, H_f, H_x,
+                                                       x_order);
+    int cols = landmark->size();
+    for (const auto &h : H_x)
+      cols += h.cols();
+    MatX H = MatX::Zero(1, cols);
+    int c = 0;
+    for (const auto &h : H_x) {
+      H.block(0, c, 1, h.cols()) = h.row(2);
+      c += h.cols();
+    }
+    H.block(0, c, 1, landmark->size()) = H_f.row(2).leftCols(landmark->size());
+    std::vector<std::shared_ptr<Type>> order = x_order;
+    order.push_back(landmark);
+    int width = 0;
+    for (const auto &var : order)
+      width = std::max(width, var->id() + var->size());
+    MatX HUT = MatX::Zero(1, width);
+    StateHelper::get_factors_for_slam_feature(state, order, H, HUT);
+
+    const DataType res = (DataType)(z_ground - p_FinG(2));
+    const DataType S = HUT.squaredNorm() + sigma * sigma;
+    const DataType rn = std::abs(res) / std::sqrt(S);
+    // Huber: beyond k sigmas the weight falls as k / |r|, so one feature
+    // cannot pull the state by more than k sigmas' worth
+    DataType sig_eff = sigma;
+    if (rn > params.ground_huber_k) {
+      sig_eff = sigma * std::sqrt(rn / params.ground_huber_k);
+      downweighted++;
+    }
+    VecX RHTr = VecX::Zero(state->get_state_size());
+    int local = 0;
+    for (const auto &var : order) {
+      RHTr.block(var->id(), 0, var->size(), 1).noalias() +=
+          H.block(0, local, 1, var->size()).transpose() * res /
+          (sig_eff * sig_eff);
+      local += var->size();
+    }
+    state->store_update_factor(HUT / sig_eff, RHTr);
+    used++;
+  }
+  if (used > 0 && (ground_frames_++ % 50) == 0) {
+    std::sort(feat_above.begin(), feat_above.end());
+    PRINT_INFO(CYAN "[GROUND]: %d SLAM features (%d down-weighted); their "
+                    "height above the ground p10 %.1f / p50 %.1f / p90 %.1f m, "
+                    "the camera %.1f m\n" RESET,
+               used, downweighted, feat_above[feat_above.size() / 10],
+               feat_above[feat_above.size() / 2],
+               feat_above[(feat_above.size() * 9) / 10], cam_above);
+  }
+}
+
+void VioManager::update_height() {
+  if (!params.use_height)
+    return;
+  if (!is_initialized_vio) {
+    height_offset_set_ = false; // a new initialisation learns a new offset
+    return;
+  }
+  const double t = state->timestamp;
+  double h = 0.0;
+  {
+    std::lock_guard<std::mutex> lck(height_mtx_);
+    if (height_buffer_.empty())
+      return;
+    auto it = std::lower_bound(
+        height_buffer_.begin(), height_buffer_.end(), t,
+        [](const std::pair<double, double> &a, double v) { return a.first < v; });
+    if (it != height_buffer_.end() && it != height_buffer_.begin()) {
+      auto prev = std::prev(it);
+      const double span = it->first - prev->first;
+      if (span > 2.0 * params.height_max_dt)
+        return;
+      const double w = span > 0.0 ? (t - prev->first) / span : 0.0;
+      h = prev->second + w * (it->second - prev->second);
+    } else {
+      const auto &near =
+          (it == height_buffer_.end()) ? height_buffer_.back() : *it;
+      if (std::abs(near.first - t) > params.height_max_dt)
+        return;
+      h = near.second;
+    }
+  }
+  const Vec3 p = state->imu->pos();
+  if (!height_offset_set_) {
+    height_offset_ = h - p(2);
+    height_offset_set_ = true;
+    height_used_ = height_rejected_ = height_reacquired_ = 0;
+    height_reject_since_ = -1.0;
+    height_streak_reacquired_ = 0;
+    PRINT_INFO(CYAN "[HEIGHT]: offset %.2f m frozen (barometer %.2f m, p_z "
+                    "%.2f m)\n" RESET,
+               height_offset_, h, p(2));
+    return;
+  }
+  const DataType sigma = params.height_sigma;
+  const DataType res = (DataType)((h - height_offset_) - p(2));
+  std::vector<std::shared_ptr<ov_type::Type>> order = {state->imu->p()};
+  MatX H = MatX::Zero(1, 3);
+  H(0, 2) = 1.0;
+  MatX U_dense, U_tri;
+  StateHelper::get_marginal_U_block(state, order, U_dense, U_tri);
+  MatX HUT = MatX::Zero(1, U_dense.rows() + U_tri.rows());
+  HUT.leftCols(U_dense.rows()).noalias() = H * U_dense.transpose();
+  HUT.rightCols(U_tri.rows()).noalias() =
+      H * U_tri.transpose().triangularView<Eigen::Lower>();
+  const DataType S = HUT.squaredNorm() + sigma * sigma;
+  const DataType chi2 = res * res / S;
+  if (chi2 > params.height_chi2_multipler * 3.841) {
+    if (height_reject_since_ < 0.0) {
+      height_reject_since_ = t;
+      PRINT_INFO(YELLOW "[HEIGHT]: rejecting from t %.2f: residual %.2f m "
+                        "(chi2 %.1f)\n" RESET,
+                 t, res, chi2);
+    }
+    const bool reacquire = params.height_reacquire_s > 0.0 &&
+                           t - height_reject_since_ >= params.height_reacquire_s;
+    if (!reacquire) {
+      height_rejected_++;
+      return;
+    }
+    // Rejected for height_reacquire_s: the barometer is right and the state
+    // has left it. Take it with its nominal sigma.
+    height_reacquired_++;
+    if (height_streak_reacquired_++ == 0)
+      PRINT_INFO(YELLOW "[HEIGHT]: re-acquiring after %.2f s, residual %.2f m "
+                        "(chi2 %.1f)\n" RESET,
+                 t - height_reject_since_, res, chi2);
+  } else if (height_reject_since_ >= 0.0) {
+    PRINT_INFO(CYAN "[HEIGHT]: back in the gate after %.2f s (%d updates taken "
+                    "outside it), residual %.2f m\n" RESET,
+               t - height_reject_since_, height_streak_reacquired_, res);
+    height_reject_since_ = -1.0;
+    height_streak_reacquired_ = 0;
+  }
+  VecX RHTr = VecX::Zero(state->get_state_size());
+  RHTr.middleRows(state->imu->p()->id(), 3) =
+      H.transpose() * res / (sigma * sigma);
+  state->store_update_factor(HUT / sigma, RHTr);
+  height_used_++;
+  if (height_used_ % 100 == 1)
+    PRINT_INFO(CYAN "[HEIGHT]: %d used (%d re-acquiring), %d rejected; "
+                    "residual %.2f m, sigma_z %.2f m\n" RESET,
+               height_used_, height_reacquired_, height_rejected_, res,
+               std::sqrt(HUT.squaredNorm()));
 }
 
 void VioManager::track_image_and_update(
@@ -654,7 +862,9 @@ void VioManager::do_feature_propagate_update(
   updaterSLAM->update(state, feats_slam_UPDATE);
 
   rT6 = boost::posix_time::microsec_clock::local_time();
+  update_ground(); // CAIRN: the SLAM features already in the state, to the ground
   updaterSLAM->delayed_init(state, feats_slam_DELAYED);
+  update_height(); // CAIRN: the barometric height, into the same update
   rT7 = boost::posix_time::microsec_clock::local_time();
   StateHelper::initialize_slam_in_U(state);
   rT8 = boost::posix_time::microsec_clock::local_time();

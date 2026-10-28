@@ -193,6 +193,16 @@ void ROS2Visualizer::setup_subscribers(
                 std::placeholders::_1));
   PRINT_INFO("subscribing to IMU: %s\n", topic_imu.c_str());
 
+  // CAIRN: barometric height aiding
+  if (_app->get_params().use_height) {
+    sub_pressure = _node->create_subscription<sensor_msgs::msg::FluidPressure>(
+        _app->get_params().height_topic, rclcpp::SensorDataQoS(),
+        std::bind(&ROS2Visualizer::callback_pressure, this,
+                  std::placeholders::_1));
+    PRINT_INFO("subscribing to barometer: %s\n",
+               _app->get_params().height_topic.c_str());
+  }
+
   // Logic for sync stereo subscriber
   // https://answers.ros.org/question/96346/subscribe-to-two-image_raws-with-one-function/?answer=96491#post-id-96491
   if (_app->get_params().state_options.num_cameras == 2) {
@@ -468,6 +478,19 @@ void ROS2Visualizer::visualize_final() {
   rT2 = boost::posix_time::microsec_clock::local_time();
   PRINT_INFO(REDPURPLE "TIME: %.3f seconds\n\n" RESET,
              (rT2 - rT1).total_microseconds() * 1e-6);
+}
+
+void ROS2Visualizer::callback_pressure(
+    const sensor_msgs::msg::FluidPressure::SharedPtr msg) {
+  const double p = msg->fluid_pressure;
+  if (!(p > 1000.0)) // not a pressure in Pa
+    return;
+  if (pressure_p0_ < 0.0)
+    pressure_p0_ = p;
+  // International barometric formula: height above the first sample
+  const double h = 44330.77 * (1.0 - std::pow(p / pressure_p0_, 0.190263));
+  const double t = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
+  _app->feed_measurement_height(t, h);
 }
 
 void ROS2Visualizer::callback_inertial(

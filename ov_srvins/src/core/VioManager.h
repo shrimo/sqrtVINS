@@ -36,6 +36,7 @@
 #include <boost/filesystem.hpp>
 #include <fstream>
 #include <memory>
+#include <deque>
 #include <mutex>
 #include <string>
 
@@ -85,6 +86,14 @@ public:
    * @param message Contains our timestamp and inertial information
    */
   void feed_measurement_imu(const ov_core::ImuData &message);
+
+  /**
+   * @brief CAIRN: feed a barometric height (m, any datum: the offset to the
+   * global frame is learnt once after initialisation)
+   * @param timestamp Time of the measurement (the IMU's clock)
+   * @param height Height in metres, up positive
+   */
+  void feed_measurement_height(double timestamp, double height);
 
   /**
    * @brief Feed function for camera measurements
@@ -186,6 +195,20 @@ protected:
 
   /// Boolean if we are initialized or not
   bool is_initialized_vio = false;
+
+  /// CAIRN height aiding: the barometric heights waiting to be used, the
+  /// frozen offset to the global frame, and counts for the log
+  void update_height();
+  /// CAIRN ground-plane prior on the SLAM features (after update_height)
+  void update_ground();
+  int ground_frames_ = 0;
+  std::deque<std::pair<double, double>> height_buffer_;
+  std::mutex height_mtx_;
+  bool height_offset_set_ = false;
+  double height_offset_ = 0.0;
+  int height_used_ = 0, height_rejected_ = 0, height_reacquired_ = 0;
+  double height_reject_since_ = -1.0; // start of the current run of rejections
+  int height_streak_reacquired_ = 0;   // updates taken in it after the wait
 
   /// Our MSCKF feature updater
   std::shared_ptr<UpdaterMSCKF> updaterMSCKF;

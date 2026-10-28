@@ -155,6 +155,53 @@ struct VioManagerOptions {
   /// phase
   bool zupt_only_at_beginning = false;
 
+  /// CAIRN: barometric height aiding. A scalar update of the IMU position's z
+  /// (z up in the global frame) by the barometric height, with an offset
+  /// learnt once after initialisation and then frozen. It anchors the
+  /// vertical, and through it the scale, where the accelerometer cannot.
+  bool use_height = false;
+
+  /// The barometer topic (sensor_msgs/FluidPressure, Pa, with a header)
+  std::string height_topic = "/mavros/imu/static_pressure";
+
+  /// Standard deviation of one height measurement (m)
+  DataType height_sigma = 0.5;
+
+  /// Chi2 multiplier for the height gate (1 dof, 95 %)
+  DataType height_chi2_multipler = 5.0;
+
+  /// Largest gap (s) between the state time and a barometer sample used for it
+  double height_max_dt = 0.25;
+
+  /// After this long (s) of consecutive rejections the barometer is taken
+  /// anyway: the gate guards against an outlier, not against the VIO's own
+  /// vertical drift (once the state has left the gate it would never come
+  /// back). 0 = never re-acquire.
+  double height_reacquire_s = 1.0;
+
+  /// CAIRN: ground-plane prior on the SLAM features. The barometer holds the
+  /// camera's height, not the features' depth: in level flight new features
+  /// are triangulated with the VIO's own scale and can sit far above the
+  /// ground. Each SLAM feature in the state gets a scalar update of its
+  /// global z to the ground level, ground_height_m above the barometer's
+  /// first sample (the pad), placed in the VIO frame by the height aiding's
+  /// frozen offset. Needs use_height. Flat ground only (no terrain model).
+  bool use_ground = false;
+
+  /// The ground above the barometer's first sample (m); 0 = the pad's level
+  double ground_height_m = 0.0;
+
+  /// Standard deviation of a feature's height on the ground (m): relief,
+  /// vegetation, buildings
+  DataType ground_sigma = 3.0;
+
+  /// Huber threshold on the normalised residual: a feature further than
+  /// this many sigmas is down-weighted, never rejected
+  DataType ground_huber_k = 3.0;
+
+  /// No prior below this camera height above the ground (m)
+  double ground_min_height_m = 15.0;
+
   /// If we should record the timing performance to file
   bool record_timing_information = false;
 
