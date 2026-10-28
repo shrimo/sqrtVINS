@@ -29,6 +29,9 @@
 
 #include "VioManager.h"
 
+#include <algorithm>
+#include <limits>
+
 #include "feat/Feature.h"
 #include "feat/FeatureDatabase.h"
 #include "feat/FeatureInitializer.h"
@@ -863,7 +866,43 @@ void VioManager::do_feature_propagate_update(
 
   rT6 = boost::posix_time::microsec_clock::local_time();
   update_ground(); // CAIRN: the SLAM features already in the state, to the ground
+  // CAIRN: the ground plane for the depth of the new SLAM features
+  {
+    double zg = std::numeric_limits<double>::quiet_NaN();
+    if (params.ground_init && params.use_height && is_initialized_vio &&
+        height_offset_set_) {
+      const double z = params.ground_height_m - height_offset_;
+      if (state->imu->pos()(2) - z >= params.ground_min_height_m)
+        zg = z;
+    }
+    updaterSLAM->set_ground_plane(zg, params.ground_init_max_ratio);
+  }
   updaterSLAM->delayed_init(state, feats_slam_DELAYED);
+  if (params.ground_init) {
+    int placed = 0, kept = 0;
+    std::vector<double> ratios;
+    updaterSLAM->take_ground_stats(placed, kept, ratios);
+    ground_init_placed_ += placed;
+    ground_init_kept_ += kept;
+    ground_init_ratios_.insert(ground_init_ratios_.end(), ratios.begin(),
+                               ratios.end());
+    if ((ground_init_placed_ + ground_init_kept_) > 0 &&
+        (++ground_init_frames_ % 50) == 0) {
+      std::sort(ground_init_ratios_.begin(), ground_init_ratios_.end());
+      const size_t n = std::max<size_t>(ground_init_ratios_.size(), 1);
+      if (ground_init_ratios_.empty())
+        ground_init_ratios_.push_back(std::numeric_limits<double>::quiet_NaN());
+      PRINT_INFO(CYAN "[GROUND-INIT]: %d new SLAM features placed on the ground, "
+                      "%d kept as triangulated; triangulated / ground depth "
+                      "p10 %.3f / p50 %.3f / p90 %.3f (the VIO's scale "
+                      "against the ground)\n" RESET,
+                 ground_init_placed_, ground_init_kept_,
+                 ground_init_ratios_[n / 10], ground_init_ratios_[n / 2],
+                 ground_init_ratios_[(n * 9) / 10]);
+      ground_init_ratios_.clear();
+      ground_init_placed_ = ground_init_kept_ = 0;
+    }
+  }
   update_height(); // CAIRN: the barometric height, into the same update
   rT7 = boost::posix_time::microsec_clock::local_time();
   StateHelper::initialize_slam_in_U(state);

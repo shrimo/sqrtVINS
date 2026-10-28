@@ -29,6 +29,8 @@
 
 #include "UpdaterSLAM.h"
 
+#include <cmath>
+
 #include "UpdaterHelper.h"
 
 #include "feat/Feature.h"
@@ -163,6 +165,33 @@ void UpdaterSLAM::delayed_init(
       (*it1)->to_delete = true;
       it1 = feature_vec.erase(it1);
       continue;
+    }
+
+    // CAIRN: the depth from the ground plane, along the anchor camera's ray
+    if (std::isfinite(ground_z_) &&
+        (int)(*it1)->featid >= state->options.max_aruco_features &&
+        (*it1)->p_FinA(2) > 0.0) {
+      const auto &cams = clones_cam.at((*it1)->anchor_cam_id);
+      auto c = cams.find((*it1)->anchor_clone_timestamp);
+      if (c != cams.end()) {
+        const Vec3 b_A = (*it1)->p_FinA.normalized();
+        const Vec3 d_G = c->second._Rot.transpose() * b_A;
+        const DataType depth_tri = (*it1)->p_FinA.norm();
+        if (d_G(2) < -0.1) { // looking down at the plane
+          const DataType lambda =
+              (DataType)((ground_z_ - c->second._pos(2)) / d_G(2));
+          const DataType ratio = depth_tri / lambda;
+          if (lambda > 0.0 && ratio < ground_max_ratio_ &&
+              ratio > 1.0 / ground_max_ratio_) {
+            (*it1)->p_FinA = lambda * b_A;
+            (*it1)->p_FinG = c->second._pos + lambda * d_G;
+            ground_placed_++;
+            ground_ratios_.push_back(ratio);
+          } else {
+            ground_kept_++;
+          }
+        }
+      }
     }
     it1++;
   }

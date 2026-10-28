@@ -30,6 +30,7 @@
 #ifndef OV_SRVINS_UPDATER_SLAM_H
 #define OV_SRVINS_UPDATER_SLAM_H
 
+#include <limits>
 #include <Eigen/Eigen>
 #include <memory>
 
@@ -108,7 +109,40 @@ public:
    */
   void change_anchors(std::shared_ptr<State> state);
 
+  /**
+   * @brief CAIRN: the ground plane for the depth of new SLAM features.
+   *
+   * With a finite z (the ground's z in the global frame, z up), delayed_init
+   * puts each new SLAM feature where its anchor camera's ray meets the
+   * plane, instead of at its triangulated depth: the triangulation runs on
+   * the clones' poses and so carries the VIO's current scale, the plane does
+   * not. NaN turns it off (the camera too low, no height aiding yet).
+   * max_depth_ratio: a feature whose triangulated and plane depths differ by
+   * more than this factor either way is left as triangulated (not on the
+   * ground, or a bad triangulation).
+   */
+  void set_ground_plane(double z_ground, double max_depth_ratio) {
+    ground_z_ = z_ground;
+    ground_max_ratio_ = max_depth_ratio;
+  }
+
+  /// Counts since the last call, and the triangulated / plane depth ratios
+  /// of the features placed (their median is the VIO's scale against the
+  /// ground: above 1, the VIO's motion is too long)
+  void take_ground_stats(int &placed, int &kept, std::vector<double> &ratios) {
+    placed = ground_placed_;
+    kept = ground_kept_;
+    ratios.swap(ground_ratios_);
+    ground_placed_ = ground_kept_ = 0;
+    ground_ratios_.clear();
+  }
+
 protected:
+  double ground_z_ = std::numeric_limits<double>::quiet_NaN();
+  double ground_max_ratio_ = 2.0;
+  int ground_placed_ = 0, ground_kept_ = 0;
+  std::vector<double> ground_ratios_;
+
   /**
    * @brief Shifts landmark anchor to new clone
    * @param state State of filter

@@ -202,6 +202,9 @@ protected:
   /// CAIRN ground-plane prior on the SLAM features (after update_height)
   void update_ground();
   int ground_frames_ = 0;
+  /// CAIRN ground-plane depth for new SLAM features: counts for the log
+  int ground_init_placed_ = 0, ground_init_kept_ = 0, ground_init_frames_ = 0;
+  std::vector<double> ground_init_ratios_;
   std::deque<std::pair<double, double>> height_buffer_;
   std::mutex height_mtx_;
   bool height_offset_set_ = false;

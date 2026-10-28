@@ -202,6 +202,16 @@ struct VioManagerOptions {
   /// No prior below this camera height above the ground (m)
   double ground_min_height_m = 15.0;
 
+  /// CAIRN: new SLAM features start on the ground plane (the anchor ray's
+  /// intersection with it) instead of at their triangulated depth, which
+  /// carries the VIO's current scale. Uses ground_height_m and
+  /// ground_min_height_m; needs use_height, not use_ground.
+  bool ground_init = false;
+
+  /// A feature whose triangulated depth is more than this factor from the
+  /// plane's either way keeps its triangulated depth
+  double ground_init_max_ratio = 2.0;
+
   /// If we should record the timing performance to file
   bool record_timing_information = false;
 

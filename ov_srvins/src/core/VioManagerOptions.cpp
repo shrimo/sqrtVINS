@@ -87,6 +87,8 @@ void VioManagerOptions::print_and_load_estimator(
     parser->parse_config("ground_sigma", ground_sigma, false);
     parser->parse_config("ground_huber_k", ground_huber_k, false);
     parser->parse_config("ground_min_height_m", ground_min_height_m, false);
+    parser->parse_config("ground_init", ground_init, false);
+    parser->parse_config("ground_init_max_ratio", ground_init_max_ratio, false);
     parser->parse_config("record_timing_information",
                          record_timing_information);
     parser->parse_config("record_timing_filepath", record_timing_filepath);
@@ -105,6 +107,9 @@ void VioManagerOptions::print_and_load_estimator(
              "sample, sigma %.1f m, huber %.1f, from %.0f m)\n",
              (int)use_ground, ground_height_m, ground_sigma, ground_huber_k,
              ground_min_height_m);
+  PRINT_INFO("  - ground-plane depth for new SLAM features: %d (within x%.1f "
+             "of the triangulated depth)\n",
+             (int)ground_init, ground_init_max_ratio);
   PRINT_DEBUG("  - record timing?: %d\n", (int)record_timing_information);
   PRINT_DEBUG("  - record timing filepath: %s\n",
               record_timing_filepath.c_str());
