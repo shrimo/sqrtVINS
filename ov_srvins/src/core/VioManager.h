@@ -37,7 +37,6 @@
 #include <fstream>
 #include <memory>
 #include <deque>
-#include <unordered_set>
 #include <mutex>
 #include <string>
 
@@ -203,12 +202,6 @@ protected:
   /// CAIRN ground-plane prior on the SLAM features (after update_height)
   void update_ground();
   int ground_frames_ = 0;
-  /// The SLAM features the ground prior has been applied to: once each. The
-  /// prior is not a new measurement at every frame; applied every frame it
-  /// would count the same information again and again and make the filter
-  /// overconfident in the features' height.
-  std::unordered_set<size_t> ground_applied_;
-  int ground_applied_total_ = 0;
   std::deque<std::pair<double, double>> height_buffer_;
   std::mutex height_mtx_;
   bool height_offset_set_ = false;
