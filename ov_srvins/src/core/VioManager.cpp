@@ -228,6 +228,13 @@ void VioManager::update_ground() {
   if (cam_above < params.ground_min_height_m || state->features_SLAM.empty())
     return;
   const DataType sigma = params.ground_sigma;
+  // Forget the features that have left the state
+  for (auto it = ground_applied_.begin(); it != ground_applied_.end();) {
+    if (state->features_SLAM.find(*it) == state->features_SLAM.end())
+      it = ground_applied_.erase(it);
+    else
+      ++it;
+  }
   std::vector<double> feat_above;
   int used = 0, downweighted = 0;
   for (const auto &pair : state->features_SLAM) {
@@ -261,6 +268,8 @@ void VioManager::update_ground() {
     if (!p_FinG.allFinite())
       continue;
     feat_above.push_back(p_FinG(2) - z_ground);
+    if (ground_applied_.count(landmark->featid))
+      continue; // its prior is already in the state
 
     // d p_FinG / d (anchor pose, calibration, feature): row z
     Mat3 H_f;
@@ -305,14 +314,17 @@ void VioManager::update_ground() {
       local += var->size();
     }
     state->store_update_factor(HUT / sig_eff, RHTr);
+    ground_applied_.insert(landmark->featid);
+    ground_applied_total_++;
     used++;
   }
-  if (used > 0 && (ground_frames_++ % 50) == 0) {
+  if (!feat_above.empty() && (ground_frames_++ % 50) == 0) {
     std::sort(feat_above.begin(), feat_above.end());
-    PRINT_INFO(CYAN "[GROUND]: %d SLAM features (%d down-weighted); their "
-                    "height above the ground p10 %.1f / p50 %.1f / p90 %.1f m, "
-                    "the camera %.1f m\n" RESET,
-               used, downweighted, feat_above[feat_above.size() / 10],
+    PRINT_INFO(CYAN "[GROUND]: %d SLAM features, %d new to the prior (%d "
+                    "down-weighted), %d in all; their height above the ground "
+                    "p10 %.1f / p50 %.1f / p90 %.1f m, the camera %.1f m\n" RESET,
+               (int)feat_above.size(), used, downweighted, ground_applied_total_,
+               feat_above[feat_above.size() / 10],
                feat_above[feat_above.size() / 2],
                feat_above[(feat_above.size() * 9) / 10], cam_above);
   }
