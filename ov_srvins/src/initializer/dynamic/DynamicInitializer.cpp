@@ -27,6 +27,7 @@
 
 
 
+#include <fstream>
 #include "DynamicInitializer.h"
 
 #include "cpi/CpiV1.h"
